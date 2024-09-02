@@ -1,6 +1,7 @@
 import {AfterViewInit, Component} from '@angular/core';
 import * as L from 'leaflet';
 import {MarkerService} from "../marker.service";
+import {ShapeService} from "../shape.service";
 
 @Component({
   selector: 'app-map-comp',
@@ -9,14 +10,63 @@ import {MarkerService} from "../marker.service";
 })
 export class MapCompComponent implements AfterViewInit {
   private map: any;
+  private states:any;
 
-  constructor(private markerService: MarkerService) {
+  constructor(private markerService: MarkerService,    private shapeService: ShapeService
+  ) {
   }
 
   ngAfterViewInit() {
     this.initMap();
     // this.markerService.makeCapitalMarkers(this.map)
-    this.markerService.makeCapitalCircleMarkers(this.map)
+    this.markerService.makeCapitalCircleMarkers(this.map);
+    this.shapeService.getStateShapes().subscribe(states => {
+      this.states = states;
+      this.initStatesLayer();
+    });
+  }
+
+  private highlightFeature(e: L.LeafletMouseEvent) {
+    const layer = e.target;
+
+    layer.setStyle({
+      weight: 10,
+      opacity: 1.0,
+      color: '#DFA612',
+      fillOpacity: 1.0,
+      fillColor: '#FAE042'
+    });
+  }
+
+  private resetFeature(e: L.LeafletMouseEvent) {
+    const layer = e.target;
+
+    layer.setStyle({
+      weight: 3,
+      opacity: 0.5,
+      color: '#008f68',
+      fillOpacity: 0.8,
+      fillColor: '#6DB65B'
+    });
+  }
+  private initStatesLayer() {
+    const stateLayer = L.geoJSON(this.states, {
+      style: (feature) => ({
+        weight: 3,
+        opacity: 0.5,
+        color: '#008f68',
+        fillOpacity: 0.8,
+        fillColor: '#6DB65B'
+      }),
+      onEachFeature: (feature, layer) => (
+        layer.on({
+          mouseover: (e) => (this.highlightFeature(e)),
+          mouseout: (e) => (this.resetFeature(e)),
+        })
+      )
+    });
+
+    this.map.addLayer(stateLayer);
   }
 
 
