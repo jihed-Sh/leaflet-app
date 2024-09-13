@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import {HttpClient} from "@angular/common/http";
 import * as L from 'leaflet';
-import {PopupService} from "./popup.service";
+import {PopupService} from "../popup/popup.service";
 @Injectable({
   providedIn: 'root'
 })
