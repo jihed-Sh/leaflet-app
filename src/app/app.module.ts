@@ -17,7 +17,9 @@ import {ShapeService} from "./shape/shape.service";
   imports: [
     BrowserModule,
     AppRoutingModule,
-    HttpClientModule
+    HttpClientModule,
+    // NgxIndexedDBModule.forRoot(dbConfig)  // Initialize the DBConfig here
+
   ],
   providers: [MarkerService,PopupService,ShapeService],
   bootstrap: [AppComponent]

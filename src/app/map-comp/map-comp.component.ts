@@ -1,68 +1,114 @@
-import { AfterViewInit, Component } from '@angular/core';
+import {Component, OnInit} from '@angular/core';
 import * as L from 'leaflet';
-import * as esri from 'esri-leaflet';
-import * as Vector from 'esri-leaflet-vector';
-import {vectorBasemapLayer} from "esri-leaflet-vector";
+import "leaflet.offline"
+import {vectorBasemapLayer} from "esri-leaflet-vector"
+import {savetiles, tileLayerOffline} from "leaflet.offline";
+
 
 @Component({
   selector: 'app-map-comp',
   templateUrl: './map-comp.component.html',
   styleUrls: ['./map-comp.component.css']
 })
-export class MapCompComponent implements AfterViewInit {
+export class MapCompComponent implements OnInit {
   private map: L.Map | undefined;
   private accessToken: string = 'AAPTxy8BH1VEsoebNVZXo8HurEk6y7SrAq1Ej5m8OdoqiCAnyiFqGoO4WMWTXinhubaP8BDm4OmiZgcasdk7kVPhcMCOb_Hcc9K90zDY45-b4E1jgQqo3eBmIdJVd8lWWpH9Vq5-rlZXrMqJwYPxDlwH9NHm5OSEvQudu_qmYDP2mZeRlGoR4JgsvuGLg2RfWaWNcTROs3bKpDy-gqYichqY5jAs9zDZQO16M-PfGW4Q_SY.AT1_eThKZYIy';
-  private basemapEnum: string = 'arcgis/streets';
 
-  ngAfterViewInit(): void {
+  ngOnInit() {
     this.initMap();
-
-
   }
 
-  private initMap(): void {
-    this.map = L.map('map', {
-      center: [34.02, -118.805],
-      zoom: 13,
-      minZoom: 2
-    });
-    const basemapLayers = {
+  initMap() {
+    this.map = L.map('map').setView([51.505, -0.09], 13);
 
-      "arcgis/outdoor": this.getV2Basemap("arcgis/outdoor").addTo(this.map),
-      "arcgis/community": this.getV2Basemap("arcgis/community"),
-      "arcgis/navigation": this.getV2Basemap("arcgis/navigation"),
-      "arcgis/streets": this.getV2Basemap("arcgis/streets"),
-      "arcgis/streets-relief": this.getV2Basemap("arcgis/streets-relief"),
-      "arcgis/imagery": this.getV2Basemap("arcgis/imagery"),
-      "arcgis/oceans": this.getV2Basemap("arcgis/oceans"),
-      "arcgis/topographic": this.getV2Basemap("arcgis/topographic"),
-      "arcgis/light-gray": this.getV2Basemap("arcgis/light-gray"),
-      "arcgis/dark-gray": this.getV2Basemap("arcgis/dark-gray"),
-      "arcgis/human-geography": this.getV2Basemap("arcgis/human-geography"),
-      "arcgis/charted-territory": this.getV2Basemap("arcgis/charted-territory"),
-      "arcgis/nova": this.getV2Basemap("arcgis/nova"),
-      "osm/standard": this.getV2Basemap("osm/standard"),
-      "osm/navigation": this.getV2Basemap("osm/navigation"),
-      "osm/streets": this.getV2Basemap("osm/streets"),
-      "osm/blueprint": this.getV2Basemap("osm/blueprint")
+    const osmOrigin = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const darkGrayArcGIS = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+    const streetsArcGIS = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+
+    const attribution = '© OpenStreetMap contributors';
+    const arcgisAttribution = 'Tiles © Esri &mdash; Esri, DeLorme, NAVTEQ';
+
+    // Initialize offline layers
+    const offlineDarkLayer = tileLayerOffline(darkGrayArcGIS, {
+      attribution: arcgisAttribution,
+      minZoom: 13,
+      maxZoom: 19,
+      crossOrigin: true
+    });
+    const darkLayerSaveControl = this.createSaveControl(offlineDarkLayer);
+
+    const offlineStreetsLayer = tileLayerOffline(streetsArcGIS, {
+      attribution: arcgisAttribution,
+      minZoom: 13,
+      maxZoom: 19,
+      crossOrigin: true
+    });
+    const streetSaveControl = this.createSaveControl(offlineStreetsLayer);
+
+    // Add offline layer initially
+    offlineDarkLayer.addTo(this.map);
+    darkLayerSaveControl.addTo(this.map);
+
+    // Initialize Esri basemap layers
+    const esriLayer = this.getV2Basemap('arcgis/dark-gray');
+    const esriLightLayer = this.getV2Basemap('arcgis/light-gray');
+
+    // Add layers to control
+    const baseLayers = {
+      'ArcGIS Dark Gray': esriLayer,
+      'ArcGIS Light Gray': esriLightLayer,
+      'Offline Dark Gray': offlineDarkLayer,
+      'Offline Streets': offlineStreetsLayer,
     };
-    // Initialize the map
 
     // @ts-ignore
-    L.control.layers(basemapLayers, null, { collapsed: false }).addTo(this.map);
-    // Add the Esri vector basemap layer using the token and vectorBasemapLayer function
-    // const vectorLayer = vectorBasemapLayer(this.basemapEnum, {
-    //   token: this.accessToken,
-    //   version: 2
-    // });
-    //
-    // vectorLayer.addTo(this.map);
+    L.control.layers(baseLayers, null, {collapsed: false}).addTo(this.map);
+
+    // Handle baselayer switching and cache logic
+    this.map.on('baselayerchange', (e: any) => {
+      if (e.name === 'Offline Dark Gray') {
+        this.addLayerWithCache(offlineDarkLayer, darkLayerSaveControl);
+      } else if (e.name === 'Offline Streets') {
+        this.addLayerWithCache(offlineStreetsLayer, streetSaveControl);
+      } else {
+        // Remove offline controls when switching to Esri layers
+        this.map?.removeLayer(offlineDarkLayer);
+        this.map?.removeLayer(offlineStreetsLayer);
+        this.map?.removeControl(darkLayerSaveControl);
+        this.map?.removeControl(streetSaveControl);
+      }
+    });
+  }
+
+  createSaveControl(layer: any) {
+    return savetiles(layer, {
+      alwaysDownload: false,
+      confirm(layer: { _tilesforSave: string | any[]; }, successCallback: () => void) {
+        if (window.confirm(`Save ${layer._tilesforSave.length} tiles?`)) {
+          successCallback();
+        }
+      },
+      confirmRemoval(layer: any, successCallback: () => void) {
+        if (window.confirm('Remove all tiles?')) {
+          successCallback();
+        }
+      },
+      saveText: 'S',
+      rmText: 'R',
+    });
   }
 
   getV2Basemap(style: string) {
     return vectorBasemapLayer(style, {
       token: this.accessToken,
-      version:2
-    })
+      version: 2
+    });
   }
+
+  addLayerWithCache(layer: L.TileLayer, control: any) {
+    this.map?.addLayer(layer);
+    this.map?.addControl(control);
+  }
+
+
 }
