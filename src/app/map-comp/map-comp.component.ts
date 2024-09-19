@@ -1,7 +1,6 @@
 import {Component, OnInit} from '@angular/core';
 import * as L from 'leaflet';
 import "leaflet.offline"
-import {vectorBasemapLayer} from "esri-leaflet-vector"
 import {savetiles, tileLayerOffline} from "leaflet.offline";
 
 
@@ -21,67 +20,26 @@ export class MapCompComponent implements OnInit {
   initMap() {
     this.map = L.map('map').setView([51.505, -0.09], 13);
 
-    const osmOrigin = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    // 1. Esri Premium Basemap Layer
+    const premiumEsriUrl = `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=${this.accessToken}`;
+    const premiumEsriLayer = L.tileLayer(premiumEsriUrl, {
+      attribution: 'Tiles © Esri',
+      maxZoom: 19,
+      minZoom: 13,
+      crossOrigin: true
+    });
+
+    // 2. Define Dark Gray layer for offline caching
     const darkGrayArcGIS = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-    const streetsArcGIS = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
-
-    const attribution = '© OpenStreetMap contributors';
-    const arcgisAttribution = 'Tiles © Esri &mdash; Esri, DeLorme, NAVTEQ';
-
-    // Initialize offline layers
     const offlineDarkLayer = tileLayerOffline(darkGrayArcGIS, {
-      attribution: arcgisAttribution,
+      attribution: '© OpenStreetMap contributors, Esri',
+      subdomains: 'abc',
       minZoom: 13,
       maxZoom: 19,
       crossOrigin: true
     });
-    const darkLayerSaveControl = this.createSaveControl(offlineDarkLayer);
 
-    const offlineStreetsLayer = tileLayerOffline(streetsArcGIS, {
-      attribution: arcgisAttribution,
-      minZoom: 13,
-      maxZoom: 19,
-      crossOrigin: true
-    });
-    const streetSaveControl = this.createSaveControl(offlineStreetsLayer);
-
-    // Add offline layer initially
-    offlineDarkLayer.addTo(this.map);
-    darkLayerSaveControl.addTo(this.map);
-
-    // Initialize Esri basemap layers
-    const esriLayer = this.getV2Basemap('arcgis/dark-gray');
-    const esriLightLayer = this.getV2Basemap('arcgis/light-gray');
-
-    // Add layers to control
-    const baseLayers = {
-      'ArcGIS Dark Gray': esriLayer,
-      'ArcGIS Light Gray': esriLightLayer,
-      'Offline Dark Gray': offlineDarkLayer,
-      'Offline Streets': offlineStreetsLayer,
-    };
-
-    // @ts-ignore
-    L.control.layers(baseLayers, null, {collapsed: false}).addTo(this.map);
-
-    // Handle baselayer switching and cache logic
-    this.map.on('baselayerchange', (e: any) => {
-      if (e.name === 'Offline Dark Gray') {
-        this.addLayerWithCache(offlineDarkLayer, darkLayerSaveControl);
-      } else if (e.name === 'Offline Streets') {
-        this.addLayerWithCache(offlineStreetsLayer, streetSaveControl);
-      } else {
-        // Remove offline controls when switching to Esri layers
-        this.map?.removeLayer(offlineDarkLayer);
-        this.map?.removeLayer(offlineStreetsLayer);
-        this.map?.removeControl(darkLayerSaveControl);
-        this.map?.removeControl(streetSaveControl);
-      }
-    });
-  }
-
-  createSaveControl(layer: any) {
-    return savetiles(layer, {
+    const darkLayerSaveControl = savetiles(offlineDarkLayer, {
       alwaysDownload: false,
       confirm(layer: { _tilesforSave: string | any[]; }, successCallback: () => void) {
         if (window.confirm(`Save ${layer._tilesforSave.length} tiles?`)) {
@@ -96,19 +54,151 @@ export class MapCompComponent implements OnInit {
       saveText: 'S',
       rmText: 'R',
     });
+
+    // Add the dark gray layer initially
+    offlineDarkLayer.addTo(this.map);
+    darkLayerSaveControl.addTo(this.map);
+
+    // Layer control for switching
+    const baseLayers = {
+      'ArcGIS Dark Gray': offlineDarkLayer,
+      'Esri Premium Imagery': premiumEsriLayer
+    };
+
+    // @ts-ignore
+    L.control.layers(baseLayers, null, { collapsed: false }).addTo(this.map);
+    //handle loading the tile event for esri layer
+    premiumEsriLayer.on('tileloadstart', async (event: any) => {
+
+      const url = event.tile.src;  // URL of the tile being loaded
+
+      try {
+        // Try to get the tile from the cache
+        const cachedTile = await this.getTileFromCache(url);
+
+        if (cachedTile) {
+          // Use the cached tile (create a Blob URL or use the blob directly)
+          console.log("boy it is fucking working");
+          const blobUrl = URL.createObjectURL(cachedTile);
+          event.tile.src = blobUrl;  // Set the tile's source to the cached blob
+        } else {
+          // Tile was not found in cache, fetch it from the network
+          console.log('Tile not found in cache, fetching from network:', url);
+
+          // Fetch the tile from the network
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+          const blob = await response.blob();
+
+          // Cache the tile
+          await this.cacheEsriTile(url, blob);
+
+          // Create a Blob URL for the fetched tile and set it
+          const blobUrl = URL.createObjectURL(blob);
+          event.tile.src = blobUrl;  // Set the tile's source to the fetched blob
+        }
+      } catch (error) {
+        console.error('Error during tile load:', error);
+      }
+    });
+    // Handle layer switching and cache logic
+    if (this.map) {
+      this.map.on('baselayerchange', (e: any) => {
+        if (e.name === 'ArcGIS Dark Gray') {
+          this.map!.removeLayer(premiumEsriLayer);
+          offlineDarkLayer.addTo(this.map!);
+          darkLayerSaveControl.addTo(this.map!);
+        } else if (e.name === 'Esri Premium Imagery') {
+          this.map!.removeLayer(offlineDarkLayer);
+          this.map!.removeControl(darkLayerSaveControl);
+          premiumEsriLayer.addTo(this.map!);
+        }
+      });
+    }
   }
 
-  getV2Basemap(style: string) {
-    return vectorBasemapLayer(style, {
-      token: this.accessToken,
-      version: 2
+
+
+// 4. Save tile to IndexedDB
+  async cacheEsriTile(tileUrl: string, blob: Blob) {
+    try {
+      // Open the IndexedDB and store the tile
+      const db = await this.openIndexedDb();
+      const transaction = db.transaction('tileStore', 'readwrite');
+      const store = transaction.objectStore('tileStore');
+
+      const tileData = {
+        url: tileUrl,
+        blob: blob,
+        timestamp: Date.now()
+      };
+
+      const request = store.put(tileData);  // Use 'put' to add or update the tile
+
+      request.onsuccess = () => {
+        console.log('Tile cached:', tileUrl);
+      };
+
+      request.onerror = () => {
+        console.error('Error caching tile:', tileUrl);
+      };
+
+    } catch (error) {
+      console.error('Error caching tile:', error);
+    }
+  }
+
+
+// 5. Retrieve tile from IndexedDB
+  async getTileFromCache(url: string): Promise<Blob | null> {
+    const db = await this.openIndexedDb();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('tileStore', 'readonly');
+      const store = transaction.objectStore('tileStore');
+
+      const request = store.get(url);  // Use 'url' as the key
+
+      request.onsuccess = (event) => {
+        const result = request.result;
+        if (result) {
+          resolve(result.blob);  // Return the tile's blob data
+        } else {
+          resolve(null);  // Tile not found in cache
+        }
+      };
+
+      request.onerror = () => {
+        reject('Error retrieving tile from cache');
+      };
     });
   }
 
-  addLayerWithCache(layer: L.TileLayer, control: any) {
-    this.map?.addLayer(layer);
-    this.map?.addControl(control);
-  }
 
+
+// 6. Initialize IndexedDB
+  async openIndexedDb(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('tileDB', 1);
+
+      request.onupgradeneeded = (event: any) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('tileStore')) {
+          // Create object store with 'url' as the key
+          db.createObjectStore('tileStore', { keyPath: 'url' });
+        }
+      };
+
+      request.onsuccess = (event:any) => {
+        resolve(event.target.result);
+      };
+
+      request.onerror = (event) => {
+        reject('Error opening IndexedDB');
+      };
+    });
+  }
 
 }
