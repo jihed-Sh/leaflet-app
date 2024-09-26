@@ -1,7 +1,11 @@
 import {Component, OnInit} from '@angular/core';
-import * as L from 'leaflet';
-import "leaflet.offline"
+// import * as L from 'leaflet';
+// import "leaflet.offline"
+declare const L: any;
 import {savetiles, tileLayerOffline} from "leaflet.offline";
+import 'node_modules/leaflet-draw/dist/leaflet.draw-src.js';
+import {geojsonToWKT, wktToGeoJSON} from "@terraformer/wkt"
+import {geoJSON} from "leaflet";
 
 
 @Component({
@@ -20,6 +24,7 @@ export class MapCompComponent implements OnInit {
   initMap() {
     this.map = L.map('map').setView([51.505, -0.09], 13);
 
+
     // 1. Esri Premium Basemap Layer
     const premiumEsriUrl = `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=${this.accessToken}`;
     const premiumEsriLayer = L.tileLayer(premiumEsriUrl, {
@@ -34,7 +39,7 @@ export class MapCompComponent implements OnInit {
     const offlineDarkLayer = tileLayerOffline(darkGrayArcGIS, {
       attribution: '© OpenStreetMap contributors, Esri',
       subdomains: 'abc',
-      minZoom: 13,
+      minZoom: 2,
       maxZoom: 19,
       crossOrigin: true
     });
@@ -56,8 +61,8 @@ export class MapCompComponent implements OnInit {
     });
 
     // Add the dark gray layer initially
-    offlineDarkLayer.addTo(this.map);
-    darkLayerSaveControl.addTo(this.map);
+    offlineDarkLayer.addTo(this.map!);
+    darkLayerSaveControl.addTo(this.map!);
 
     // Layer control for switching
     const baseLayers = {
@@ -117,8 +122,99 @@ export class MapCompComponent implements OnInit {
         }
       });
     }
+    let drawControl = new L.Control.Draw({
+      draw: {
+        polyline: {
+          shapeOptions: {
+            color: 'yellow' // Change polyline color to yellow
+          }
+        },
+        polygon: {
+          allowIntersection: false,
+          shapeOptions: {
+            color: 'yellow' // Change polygon color to yellow
+          }
+        },
+        rectangle: {
+          shapeOptions: {
+            color: 'yellow' // Change rectangle color to yellow
+          }
+        },
+        circle: {
+          shapeOptions: {
+            color: 'yellow' // Change circle color to yellow
+          }
+        },
+        circlemarker: false, // Disable circle marker if not needed
+        marker: false // Disable markers if not needed
+      },
+      edit: {
+        featureGroup: new L.FeatureGroup()
+      }
+    });
+    this.map?.addControl(drawControl);
+    this.map?.on(L.Draw.Event.CREATED, (event: any) => {
+      const {layerType, layer} = event;
+
+      // For rectangle, calculate area
+      if (layerType === "rectangle") {
+        const bounds = layer.getBounds();  // Get the bounds of the rectangle
+        const southWest = bounds.getSouthWest();
+        const northEast = bounds.getNorthEast();
+        const area = this.calculateRectangleArea(southWest, northEast);
+        alert(`Rectangle Area: ${area.toFixed(2)} square kilometers`);
+      }
+
+      // For polyline, calculate total distance
+      if (layerType === "polyline") {
+        const latlngs = layer.getLatLngs();
+        const totalDistance = this.calculateDistance(latlngs);
+        const geoJSON=layer.toGeoJSON().geometry;
+        // console.log(geojsonToWKT(geoJSON));
+        // console.log(wktToGeoJSON("POINT (-122.6764 45.5165)"));
+        alert(`Total distance: ${totalDistance.toFixed(2)} kilometers`);
+      }
+
+      // For polygon, calculate area
+      if (layerType === 'polygon') {
+        const latlngs = layer.getLatLngs()[0];  // Use the first array of latlngs
+        const area = L.GeometryUtil.geodesicArea(latlngs);  // Area in square meters
+        const geoJSON=layer.toGeoJSON().geometry;
+        // console.log(geojsonToWKT(geoJSON));
+        alert(`Polygon Area: ${(area / 1000000).toFixed(2)} square kilometers`);
+      }
+
+      // For circle, calculate area
+      if (layerType === 'circle') {
+
+        const radius = layer.getRadius();  // Radius in meters
+        const area = Math.PI * Math.pow(radius, 2);  // Area of the circle (πr²)
+        const geoJSON=layer.toGeoJSON();
+        const geoJSONGeometry=geoJSON.geometry;
+        console.log(geoJSON)
+        console.log(geojsonToWKT(geoJSONGeometry));
+        alert(`Circle Area: ${(area / 1000000).toFixed(2)} square kilometers`);
+      }
+
+      // Add the layer to the map
+      this.map?.addLayer(layer);
+    });
+  }
+  calculateRectangleArea(southWest: L.LatLng, northEast: L.LatLng): number {
+    const width = southWest.distanceTo(new L.LatLng(southWest.lat, northEast.lng));  // Distance between the two points
+    const height = southWest.distanceTo(new L.LatLng(northEast.lat, southWest.lng));
+    const area = (width * height) / 1000000;  // Convert area from square meters to square kilometers
+    return area;
   }
 
+
+  calculateDistance(latlngs: L.LatLng[]): number {
+    let totalDistance = 0;
+    for (let i = 0; i < latlngs.length - 1; i++) {
+      totalDistance += latlngs[i].distanceTo(latlngs[i + 1]);  // Calculates distance in meters
+    }
+    return totalDistance / 1000;
+  }
 
 
 // 4. Save tile to IndexedDB
