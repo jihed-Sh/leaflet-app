@@ -6,6 +6,9 @@ import {savetiles, tileLayerOffline} from "leaflet.offline";
 import 'node_modules/leaflet-draw/dist/leaflet.draw-src.js';
 import {geojsonToWKT, wktToGeoJSON} from "@terraformer/wkt"
 import {geoJSON} from "leaflet";
+import {logMessages} from "@angular-devkit/build-angular/src/tools/esbuild/utils";
+// Define a maximum storage limit (in bytes) for IndexedDB
+const MAX_STORAGE_SIZE = 2 * 1024 * 1024; // 2MB for testing
 
 
 @Component({
@@ -18,7 +21,9 @@ export class MapCompComponent implements OnInit {
   private accessToken: string = 'AAPTxy8BH1VEsoebNVZXo8HurEk6y7SrAq1Ej5m8OdoqiCAnyiFqGoO4WMWTXinhubaP8BDm4OmiZgcasdk7kVPhcMCOb_Hcc9K90zDY45-b4E1jgQqo3eBmIdJVd8lWWpH9Vq5-rlZXrMqJwYPxDlwH9NHm5OSEvQudu_qmYDP2mZeRlGoR4JgsvuGLg2RfWaWNcTROs3bKpDy-gqYichqY5jAs9zDZQO16M-PfGW4Q_SY.AT1_eThKZYIy';
 
   ngOnInit() {
+
     this.initMap();
+
   }
 
   initMap() {
@@ -30,7 +35,7 @@ export class MapCompComponent implements OnInit {
     const premiumEsriLayer = L.tileLayer(premiumEsriUrl, {
       attribution: 'Tiles © Esri',
       maxZoom: 19,
-      minZoom: 13,
+      minZoom: 5,
       crossOrigin: true
     });
 
@@ -39,16 +44,21 @@ export class MapCompComponent implements OnInit {
     const offlineDarkLayer = tileLayerOffline(darkGrayArcGIS, {
       attribution: '© OpenStreetMap contributors, Esri',
       subdomains: 'abc',
-      minZoom: 2,
+      minZoom: 5,
       maxZoom: 19,
       crossOrigin: true
     });
-
+    const mapInstance=this.map;
     const darkLayerSaveControl = savetiles(offlineDarkLayer, {
       alwaysDownload: false,
       confirm(layer: { _tilesforSave: string | any[]; }, successCallback: () => void) {
-        if (window.confirm(`Save ${layer._tilesforSave.length} tiles?`)) {
-          successCallback();
+        const zoomLevel = mapInstance!.getZoom(); // Get current zoom level
+        if (zoomLevel >= 10 && zoomLevel <= 13) {
+          if (window.confirm(`Save ${layer._tilesforSave.length} tiles?`)) {
+            successCallback();
+          }
+        } else {
+          alert('Zoom level must be 13 or above to cache tiles.');
         }
       },
       confirmRemoval(layer: any, successCallback: () => void) {
@@ -74,39 +84,42 @@ export class MapCompComponent implements OnInit {
     L.control.layers(baseLayers, null, { collapsed: false }).addTo(this.map);
     //handle loading the tile event for esri layer
     premiumEsriLayer.on('tileloadstart', async (event: any) => {
+      const zoomLevel=mapInstance?.getZoom();
+      if(zoomLevel && zoomLevel >= 10 && zoomLevel <= 13){
+        const url = event.tile.src;  // URL of the tile being loaded
 
-      const url = event.tile.src;  // URL of the tile being loaded
+        try {
+          // Try to get the tile from the cache
+          const cachedTile = await this.getTileFromCache(url);
 
-      try {
-        // Try to get the tile from the cache
-        const cachedTile = await this.getTileFromCache(url);
+          if (cachedTile) {
+            // Use the cached tile (create a Blob URL or use the blob directly)
+            console.log("boy it is fucking working");
+            const blobUrl = URL.createObjectURL(cachedTile);
+            event.tile.src = blobUrl;  // Set the tile's source to the cached blob
+          } else {
+            // Tile was not found in cache, fetch it from the network
+            console.log('Tile not found in cache, fetching from network:', url);
 
-        if (cachedTile) {
-          // Use the cached tile (create a Blob URL or use the blob directly)
-          console.log("boy it is fucking working");
-          const blobUrl = URL.createObjectURL(cachedTile);
-          event.tile.src = blobUrl;  // Set the tile's source to the cached blob
-        } else {
-          // Tile was not found in cache, fetch it from the network
-          console.log('Tile not found in cache, fetching from network:', url);
+            // Fetch the tile from the network
+            const response = await fetch(url);
+            if (!response.ok) {
+              throw new Error('Network response was not ok');
+            }
+            const blob = await response.blob();
 
-          // Fetch the tile from the network
-          const response = await fetch(url);
-          if (!response.ok) {
-            throw new Error('Network response was not ok');
+            // Cache the tile
+            await this.cacheEsriTile(url, blob);
+
+            // Create a Blob URL for the fetched tile and set it
+            const blobUrl = URL.createObjectURL(blob);
+            event.tile.src = blobUrl;  // Set the tile's source to the fetched blob
           }
-          const blob = await response.blob();
-
-          // Cache the tile
-          await this.cacheEsriTile(url, blob);
-
-          // Create a Blob URL for the fetched tile and set it
-          const blobUrl = URL.createObjectURL(blob);
-          event.tile.src = blobUrl;  // Set the tile's source to the fetched blob
+        } catch (error) {
+          console.error('Error during tile load:', error);
         }
-      } catch (error) {
-        console.error('Error during tile load:', error);
       }
+
     });
     // Handle layer switching and cache logic
     if (this.map) {
@@ -206,8 +219,6 @@ export class MapCompComponent implements OnInit {
     const area = (width * height) / 1000000;  // Convert area from square meters to square kilometers
     return area;
   }
-
-
   calculateDistance(latlngs: L.LatLng[]): number {
     let totalDistance = 0;
     for (let i = 0; i < latlngs.length - 1; i++) {
@@ -215,8 +226,6 @@ export class MapCompComponent implements OnInit {
     }
     return totalDistance / 1000;
   }
-
-
 // 4. Save tile to IndexedDB
   async cacheEsriTile(tileUrl: string, blob: Blob) {
     try {
@@ -225,12 +234,23 @@ export class MapCompComponent implements OnInit {
       const transaction = db.transaction('tileStore', 'readwrite');
       const store = transaction.objectStore('tileStore');
 
+      // Calculate total storage size within the transaction
+      let totalSize = await this.calculateTotalStorageSize(store);
+      console.log(`Current total size: ${(totalSize / (1024 * 1024)).toFixed(2)} MB`);
+
       const tileData = {
         url: tileUrl,
         blob: blob,
         timestamp: Date.now()
       };
 
+      // If the total size exceeds the limit, evict oldest tiles
+      if (totalSize > MAX_STORAGE_SIZE) {
+        console.log('Max storage limit exceeded. Evicting oldest tiles...');
+        await this.evictOldestTiles(store);  // Pass the store to avoid transaction issues
+      }
+
+      // After eviction (if needed), put the new tile in the same transaction
       const request = store.put(tileData);  // Use 'put' to add or update the tile
 
       request.onsuccess = () => {
@@ -241,13 +261,62 @@ export class MapCompComponent implements OnInit {
         console.error('Error caching tile:', tileUrl);
       };
 
+      // Ensure the transaction is complete
+      await new Promise((resolve, reject) => {
+        transaction.oncomplete = () => resolve(null);
+        transaction.onerror = () => reject('Transaction failed');
+      });
+
     } catch (error) {
       console.error('Error caching tile:', error);
     }
   }
 
+// Modify calculateTotalStorageSize to accept a store as a parameter
+  async calculateTotalStorageSize(store: IDBObjectStore): Promise<number> {
+    return new Promise((resolve, reject) => {
+      let totalSize = 0;
+      const cursorRequest = store.openCursor();
 
-// 5. Retrieve tile from IndexedDB
+      cursorRequest.onsuccess = (event: any) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const tile = cursor.value;
+          totalSize += tile.blob.size;  // Add the size of each tile's blob
+          cursor.continue();
+        } else {
+          resolve(totalSize);  // Return the total size once all tiles are counted
+        }
+      };
+
+      cursorRequest.onerror = (event) => {
+        reject('Error calculating storage size');
+      };
+    });
+  }
+
+  async evictOldestTiles(store: IDBObjectStore) {
+    return new Promise((resolve, reject) => {
+      console.log(store.index('timestamp'))
+      const index = store.index('timestamp');  // Assuming there's an index on 'timestamp'
+      const cursorRequest = index.openCursor(null, 'next');  // Iterate over tiles in order of oldest first
+
+      cursorRequest.onsuccess = (event: any) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          store.delete(cursor.primaryKey);  // Delete the oldest tile
+          cursor.continue();  // Continue to the next tile (FIFO)
+        } else {
+          resolve('Eviction complete');
+        }
+      };
+
+      cursorRequest.onerror = (event) => {
+        reject('Error evicting tiles');
+      };
+    });
+  }
+
   async getTileFromCache(url: string): Promise<Blob | null> {
     const db = await this.openIndexedDb();
 
@@ -272,9 +341,6 @@ export class MapCompComponent implements OnInit {
     });
   }
 
-
-
-// 6. Initialize IndexedDB
   async openIndexedDb(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open('tileDB', 1);
@@ -282,8 +348,8 @@ export class MapCompComponent implements OnInit {
       request.onupgradeneeded = (event: any) => {
         const db = event.target.result;
         if (!db.objectStoreNames.contains('tileStore')) {
-          // Create object store with 'url' as the key
-          db.createObjectStore('tileStore', { keyPath: 'url' });
+          const tileStore = db.createObjectStore('tileStore', { keyPath: 'url' });
+          tileStore.createIndex('timestamp', 'timestamp', { unique: false });  // Create an index on 'timestamp'
         }
       };
 
@@ -296,5 +362,32 @@ export class MapCompComponent implements OnInit {
       };
     });
   }
+
+  // async calculateTotalStorageSize(): Promise<number> {
+  //   const db = await this.openIndexedDb();
+  //   return new Promise((resolve, reject) => {
+  //     const transaction = db.transaction('tileStore', 'readonly');
+  //     const store = transaction.objectStore('tileStore');
+  //
+  //     let totalSize = 0;
+  //     const cursorRequest = store.openCursor();
+  //
+  //     cursorRequest.onsuccess = (event: any) => {
+  //       const cursor = event.target.result;
+  //       if (cursor) {
+  //         const tile = cursor.value;
+  //         totalSize += tile.blob.size;  // Add the size of each tile's blob
+  //         cursor.continue();
+  //       } else {
+  //         resolve(totalSize);  // Return the total size once all tiles are counted
+  //       }
+  //     };
+  //
+  //     cursorRequest.onerror = (event) => {
+  //       reject('Error calculating storage size');
+  //     };
+  //   });
+  // }
+
 
 }
